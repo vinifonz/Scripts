@@ -7,36 +7,78 @@
   ========================================================================== */
 
   /**
-   * Retorna o valor de um parâmetro na URL.
+   * Verifica se localStorage está disponível e funcionando
+   * @returns {boolean}
+   */
+  function isLocalStorageAvailable() {
+    var test = 'test';
+    try {
+      localStorage.setItem(test, test);
+      localStorage.removeItem(test);
+      return true;
+    } catch(e) {
+      return false;
+    }
+  }
+
+  /**
+   * Sanitiza uma string para uso seguro em URLs
+   * @param {string} str String para sanitizar
+   * @returns {string}
+   */
+  function sanitizeString(str) {
+    if (typeof str !== 'string') {
+      return '';
+    }
+    return str.replace(/[^\w\s-]/g, '').trim();
+  }
+
+  /**
+   * Retorna o valor de um parâmetro na URL com sanitização.
    * @param {string} name Nome do parâmetro.
    * @param {string} [url] URL para extração (padrão: window.location.href).
    * @returns {string|null}
    */
   function getQueryParam(name, url) {
+    if (typeof name !== 'string') {
+      return null;
+    }
     url = url || window.location.href;
     name = name.replace(/[\[\]]/g, "\\$&");
     var regex = new RegExp("[?&]" + name + "(=([^&#]*)|&|#|$)"),
         results = regex.exec(url);
     if (!results) return null;
     if (!results[2]) return '';
-    return decodeURIComponent(results[2].replace(/\+/g, " "));
+    try {
+      return decodeURIComponent(results[2].replace(/\+/g, " "));
+    } catch(e) {
+      return null;
+    }
   }
 
   /**
    * Define um cookie com tempo de expiração (em segundos) e domínio customizado.
-   * Substitua o domínio conforme sua necessidade.
    * @param {string} name Nome do cookie.
    * @param {string} value Valor do cookie.
    * @param {number} seconds Tempo de expiração em segundos.
    */
   function setCookie(name, value, seconds) {
+    if (typeof name !== 'string' || typeof value === 'undefined') {
+      return;
+    }
     var expires = "";
     if (seconds) {
       var date = new Date();
-      date.setTime(date.getTime() + seconds * 1000);
+      date.setTime(date.getTime() + (seconds * 1000));
       expires = "; expires=" + date.toUTCString();
     }
-    document.cookie = name + "=" + encodeURIComponent(value) + expires + "; path=/; domain=.{{0 | Dominio}}; SameSite=Lax; Secure";
+    try {
+      document.cookie = name + "=" + encodeURIComponent(value) + 
+                       expires + 
+                       "; path=/; domain=.{{0 | Dominio}}; SameSite=Lax; Secure";
+    } catch(e) {
+      console.warn('Erro ao definir cookie:', e);
+    }
   }
 
   /**
@@ -45,11 +87,20 @@
    * @returns {string|null}
    */
   function getCookie(name) {
+    if (typeof name !== 'string') {
+      return null;
+    }
     var nameEQ = name + "=";
     var ca = document.cookie.split(';');
-    for(var i = 0; i < ca.length; i++){
+    for(var i = 0; i < ca.length; i++) {
       var c = ca[i].trim();
-      if (c.indexOf(nameEQ) === 0) return decodeURIComponent(c.substring(nameEQ.length));
+      if (c.indexOf(nameEQ) === 0) {
+        try {
+          return decodeURIComponent(c.substring(nameEQ.length));
+        } catch(e) {
+          return null;
+        }
+      }
     }
     return null;
   }
@@ -59,31 +110,60 @@
    * @returns {string}
    */
   function generateUID() {
-    // Gerado sem prefixo, apenas timestamp + número aleatório.
-    return new Date().getTime() + '' + Math.floor(Math.random() * 1000000);
+    return [
+      new Date().getTime(),
+      Math.floor(Math.random() * 1000000)
+    ].join('');
   }
 
   /**
    * Atualiza (ou cria) o objeto de localStorage na key "stape".
-   * Os dados são armazenados como um objeto JSON.
    * @param {Object} newData Objeto com as propriedades a serem atualizadas.
+   * @returns {boolean} Sucesso da operação
    */
   function updateStapeStorage(newData) {
+    if (!isLocalStorageAvailable() || !newData || typeof newData !== 'object') {
+      return false;
+    }
+
     var stapeData = {};
     try {
       var existing = localStorage.getItem('stape');
-      if (existing) {
-        stapeData = JSON.parse(existing);
+      if (existing && typeof existing === 'string') {
+        var parsed = JSON.parse(existing);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          stapeData = parsed;
+        }
       }
     } catch(e) {
       stapeData = {};
     }
+
+    // Limita o histórico de toques para evitar exceder quota
+    if (stapeData.touchHistory && Array.isArray(stapeData.touchHistory)) {
+      if (stapeData.touchHistory.length > 50) {
+        stapeData.touchHistory = stapeData.touchHistory.slice(-50);
+      }
+    }
+
     for (var key in newData) {
-      if (newData.hasOwnProperty(key)) {
+      if (newData.hasOwnProperty(key) && typeof newData[key] !== 'undefined') {
         stapeData[key] = newData[key];
       }
     }
-    localStorage.setItem('stape', JSON.stringify(stapeData));
+
+    try {
+      var dataString = JSON.stringify(stapeData);
+      if (dataString.length > 2097152) { // 2MB limit
+        console.warn('Storage data exceeds 2MB limit');
+        return false;
+      }
+      localStorage.setItem('stape', dataString);
+      return true;
+    } catch(e) {
+      console.warn('Error updating storage:', e);
+      return false;
+    }
   }
 
   /* ==========================================================================
@@ -91,11 +171,10 @@
   ========================================================================== */
 
   var EXPIRY_SECONDS = 31536000; // 1 ano (em segundos)
-  // Atualizamos a lista de parâmetros utm para incluir "utm_id" e "ad_id"
   var utmParams = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','utm_id','ad_id'];
-  // Atualizamos os parâmetros de clique para incluir "gclig" (caso haja variações)
   var clickParams = ['fbclid','gclid','gclig','ttclid','xclid'];
   var cookiePrefix = 'trk_';
+  var VERSION = '1.1.0'; // Adicionado versionamento
 
   /* ==========================================================================
      ETAPA 1: Recuperação / Criação do identificador único "xcod"
@@ -104,40 +183,50 @@
   if (!xcod) {
     xcod = generateUID();
     setCookie(cookiePrefix + 'xcod', xcod, EXPIRY_SECONDS);
-    updateStapeStorage({ xcod: xcod });
-    sessionStorage.setItem(cookiePrefix + 'xcod', xcod);
+    if (isLocalStorageAvailable()) {
+      updateStapeStorage({ xcod: xcod, version: VERSION });
+      try {
+        sessionStorage.setItem(cookiePrefix + 'xcod', xcod);
+      } catch(e) {}
+    }
   }
 
   /* ==========================================================================
      ETAPA 2: Gravação dos dados de "entrada" (fixos no primeiro acesso)
-     - Se o cookie trk_data_entrada não existir, os dados serão coletados e salvos.
   ========================================================================== */
   var dataEntradaCookie = getCookie(cookiePrefix + 'data_entrada');
   var entryData = {};
 
   if (!dataEntradaCookie) {
-    utmParams.forEach(function(param) {
+    for (var i = 0; i < utmParams.length; i++) {
+      var param = utmParams[i];
       entryData[param] = getQueryParam(param) || "";
       setCookie(cookiePrefix + param, entryData[param], EXPIRY_SECONDS);
-    });
-    clickParams.forEach(function(param) {
-      var val = getQueryParam(param);
+    }
+    
+    for (var j = 0; j < clickParams.length; j++) {
+      var clickParam = clickParams[j];
+      var val = getQueryParam(clickParam);
       if (val) {
-        entryData[param] = val;
-        setCookie(cookiePrefix + param, val, EXPIRY_SECONDS);
+        entryData[clickParam] = val;
+        setCookie(cookiePrefix + clickParam, val, EXPIRY_SECONDS);
       }
-    });
+    }
+
     if (!entryData['utm_source'] || entryData['utm_source'] === "") {
-      entryData['utm_source'] = document.referrer ? (new URL(document.referrer).hostname || "indefinido") : "direto";
+      try {
+        entryData['utm_source'] = document.referrer ? 
+          (document.referrer.split('/')[2] || "indefinido") : 
+          "direto";
+      } catch(e) {
+        entryData['utm_source'] = "indefinido";
+      }
       setCookie(cookiePrefix + 'utm_source', entryData['utm_source'], EXPIRY_SECONDS);
     }
-    entryData['data_entrada'] = Date.now();
+
+    entryData['data_entrada'] = new Date().getTime();
     setCookie(cookiePrefix + 'data_entrada', entryData['data_entrada'], EXPIRY_SECONDS);
     entryData['xcod'] = xcod;
-    // Você pode adicionar outras chaves conforme necessário, por exemplo:
-    // entryData['gtm_nome'] = 'nome';
-    // entryData['ftid'] = 'vinifo@gmail.com';
-    // entryData['phone'] = '+5598882829182';
     updateStapeStorage(entryData);
   } else {
     try {
@@ -150,40 +239,45 @@
     }
   }
 
-   /* ==========================================================================  
-     ETAPA 3: Coleta dos parâmetros "atuais" (dinâmicos a cada acesso)  
+  /* ==========================================================================
+     ETAPA 3: Coleta dos parâmetros "atuais" (dinâmicos a cada acesso)
   ========================================================================== */
   var currentData = {};
-  utmParams.forEach(function(param) {
-    currentData[param] = getQueryParam(param) || "";
-  });
   
-  // Se utm_source estiver vazio, aplica o fallback semelhante ao entryData
-  if (!currentData['utm_source'] || currentData['utm_source'] === "") {
-    currentData['utm_source'] = document.referrer ? (new URL(document.referrer).hostname || "indefinido") : "direto";
+  for (var k = 0; k < utmParams.length; k++) {
+    currentData[utmParams[k]] = getQueryParam(utmParams[k]) || "";
   }
   
-  clickParams.forEach(function(param) {
-    var val = getQueryParam(param);
-    if (val) {
-      currentData[param] = val;
+  if (!currentData['utm_source'] || currentData['utm_source'] === "") {
+    try {
+      currentData['utm_source'] = document.referrer ? 
+        (document.referrer.split('/')[2] || "indefinido") : 
+        "direto";
+    } catch(e) {
+      currentData['utm_source'] = "indefinido";
     }
-  });
-  currentData['dataAtual'] = Date.now();
+  }
+  
+  for (var l = 0; l < clickParams.length; l++) {
+    var currentClickParam = clickParams[l];
+    var currentVal = getQueryParam(currentClickParam);
+    if (currentVal) {
+      currentData[currentClickParam] = currentVal;
+    }
+  }
+  
+  currentData['dataAtual'] = new Date().getTime();
   currentData['xcod'] = xcod;
-
 
   /* ==========================================================================
      ETAPA 4: Construção dos parâmetros customizados para a URL
-     - "src": dados de entrada no formato:
-           utm_sourceEntrada|utm_mediumEntrada|utm_campaignEntrada|utm_termEntrada|utm_contentEntrada|[utm_id]|[ad_id]|data_entrada
-     - "sck": dados atuais no formato:
-           utm_sourceAtual|utm_mediumAtual|utm_campaignAtual|utm_termAtual|utm_contentAtual|[utm_id]|[ad_id]|dataAtual
   ========================================================================== */
   function buildCustomParam(suffix, dataObj) {
-    return utmParams.map(function(param) {
-      return dataObj[param] || "";
-    }).join("|") + "|" + (dataObj['data' + suffix] || "");
+    var values = [];
+    for (var i = 0; i < utmParams.length; i++) {
+      values.push(dataObj[utmParams[i]] || "");
+    }
+    return values.join("|") + "|" + (dataObj['data' + suffix] || "");
   }
 
   var srcParam = buildCustomParam("entrada", entryData);
@@ -191,90 +285,140 @@
 
   /* ==========================================================================
      ETAPA 5: Atualização da URL do navegador
-     Insere os parâmetros "src" e "sck" na URL para resiliência em navegações internas.
   ========================================================================== */
   (function updateBrowserURL(){
-    var searchParams = new URLSearchParams(window.location.search);
-    if (!searchParams.has('src')) {
-      searchParams.set('src', srcParam);
+    try {
+      var currentUrl = window.location.href;
+      var baseUrl = window.location.pathname;
+      var hash = window.location.hash;
+      var params = [];
+      var queryStart = currentUrl.indexOf('?');
+      var existingParams = {};
+      
+      if (queryStart !== -1) {
+        var query = currentUrl.slice(queryStart + 1);
+        var pairs = query.split('&');
+        for (var i = 0; i < pairs.length; i++) {
+          var pair = pairs[i].split('=');
+          if (pair[0] !== 'src' && pair[0] !== 'sck') {
+            params.push(pairs[i]);
+            existingParams[pair[0]] = true;
+          }
+        }
+      }
+      
+      if (!existingParams.src) {
+        params.push('src=' + encodeURIComponent(srcParam));
+      }
+      if (!existingParams.sck) {
+        params.push('sck=' + encodeURIComponent(sckParam));
+      }
+      
+      var newUrl = baseUrl + (params.length ? '?' + params.join('&') : '') + hash;
+      window.history.replaceState(null, "", newUrl);
+    } catch(e) {
+      console.warn('Error updating URL:', e);
     }
-    if (!searchParams.has('sck')) {
-      searchParams.set('sck', sckParam);
-    }
-    // Para atualizar sempre os valores atuais, descomente as linhas abaixo:
-    // searchParams.set('src', srcParam);
-    // searchParams.set('sck', sckParam);
-    var newRelativePathQuery = window.location.pathname + '?' + searchParams.toString() + window.location.hash;
-    window.history.replaceState(null, "", newRelativePathQuery);
   })();
 
   /* ==========================================================================
-     ETAPA 6: (OPCIONAL) Atualização de links/botões específicos com os dados coletados
-     Exemplo de como injetar o "xcod" (ou outros parâmetros) em links específicos.
+     ETAPA 6: (OPCIONAL) Atualização de links/botões específicos
   ========================================================================== */
-  /*
-  (function updateButtons(){
+  function updateButtons() {
     var links = document.getElementsByTagName('a');
-    for(var i = 0; i < links.length; i++){
+    var paymentDomain = 'payment.seusite.com';
+    
+    for (var i = 0; i < links.length; i++) {
       var el = links[i];
       try {
-        if(el.href && el.href.indexOf('https://payment.seusite.com') > -1){
-          var urlObj = new URL(el.href);
-          urlObj.searchParams.set('xcod', xcod);
-          // Para injetar também "src" ou "sck", use:
-          // urlObj.searchParams.set('src', srcParam);
-          // urlObj.searchParams.set('sck', sckParam);
-          el.href = urlObj.toString();
+        if (el.href && el.href.indexOf(paymentDomain) > -1) {
+          var url = el.href;
+          var separator = url.indexOf('?') === -1 ? '?' : '&';
+          
+          // Adiciona xcod
+          if (url.indexOf('xcod=') === -1) {
+            url += separator + 'xcod=' + encodeURIComponent(xcod);
+            separator = '&';
+          }
+          
+          el.href = url;
         }
       } catch(e) {
-        console.warn("Erro ao atualizar link: ", el, e);
+        console.warn('Error updating link:', el, e);
       }
     }
-  })();
-  */
+  }
+  // Descomente para ativar a atualização de links
+  // updateButtons();
 
   /* ==========================================================================
      ETAPA 7: Armazenamento do Histórico de Touches
-     Para tornar o rastreamento mais robusto e possibilitar uma atribuição multi-touch,
-     registramos cada toque (quando os parâmetros UTM estiverem presentes) em um histórico.
   ========================================================================== */
   function updateTouchHistory(currentUTMData) {
+    if (!isLocalStorageAvailable() || !currentUTMData) {
+      return false;
+    }
+
     var stapeData = {};
     try {
-      stapeData = JSON.parse(localStorage.getItem('stape')) || {};
+      var stored = localStorage.getItem('stape');
+      if (stored) {
+        stapeData = JSON.parse(stored);
+      }
     } catch(e) {
       stapeData = {};
     }
-    var history = stapeData.touchHistory || [];
-    // Cria um novo toque com os parâmetros UTM e timestamp.
+
+    var history = Array.isArray(stapeData.touchHistory) ? stapeData.touchHistory : [];
+    
     var newTouch = {
       utm: {},
-      timestamp: Date.now()
+      timestamp: new Date().getTime()
     };
-    utmParams.forEach(function(param) {
+
+    for (var i = 0; i < utmParams.length; i++) {
+      var param = utmParams[i];
       newTouch.utm[param] = currentUTMData[param] || "";
-    });
-    // Evita duplicações: adiciona o toque se for diferente do último registrado.
-    if (history.length === 0 || JSON.stringify(history[history.length - 1].utm) !== JSON.stringify(newTouch.utm)) {
-      history.push(newTouch);
     }
-    stapeData.touchHistory = history;
-    localStorage.setItem('stape', JSON.stringify(stapeData));
+
+    var lastTouch = history.length ? history[history.length - 1] : null;
+    if (!lastTouch || JSON.stringify(lastTouch.utm) !== JSON.stringify(newTouch.utm)) {
+      history.push(newTouch);
+      
+      // Mantém apenas os últimos 50 toques
+      if (history.length > 50) {
+        history = history.slice(-50);
+      }
+      
+      stapeData.touchHistory = history;
+      try {
+        localStorage.setItem('stape', JSON.stringify(stapeData));
+        return true;
+      } catch(e) {
+        console.warn('Error updating touch history:', e);
+        return false;
+      }
+    }
+    return true;
   }
-  // Se houver ao menos um dos parâmetros UTM na visita atual, atualiza o histórico.
-  var hasNewUTM = utmParams.some(function(param) {
-    return currentData[param] && currentData[param] !== "";
-  });
+
+  var hasNewUTM = false;
+  for (var m = 0; m < utmParams.length; m++) {
+    if (currentData[utmParams[m]] && currentData[utmParams[m]] !== "") {
+      hasNewUTM = true;
+      break;
+    }
+  }
+  
   if (hasNewUTM) {
     updateTouchHistory(currentData);
   }
 
   /* ==========================================================================
-     EXPOSIÇÃO DOS DADOS (OPCIONAL)
-     Os dados coletados são expostos via variável global _trackingData, 
-     facilitando a utilização em outras tags ou Data Variables no GTM.
+     EXPOSIÇÃO DOS DADOS
   ========================================================================== */
   window._trackingData = {
+    version: VERSION,
     xcod: xcod,
     entryData: entryData,
     currentData: currentData,
@@ -282,29 +426,6 @@
     sck: sckParam
   };
 
-  /* ==========================================================================
-     LISTA DE ARMAZENAMENTO CRIADO PELO SCRIPT
-     - Cookies (salvos individualmente com prefixo "trk_"):
-         • trk_xcod: Identificador único do visitante.
-         • trk_data_entrada: Timestamp do primeiro acesso (em milissegundos).
-         • trk_utm_source: Valor do parâmetro utm_source (ou hostname do referrer se ausente).
-         • trk_utm_medium: Valor do parâmetro utm_medium.
-         • trk_utm_campaign: Valor do parâmetro utm_campaign.
-         • trk_utm_term: Valor do parâmetro utm_term.
-         • trk_utm_content: Valor do parâmetro utm_content.
-         • trk_utm_id: Valor do parâmetro utm_id.
-         • trk_ad_id: Valor do parâmetro ad_id.
-         • (Outros cookies de clique, se presentes, como trk_fbclid, trk_gclid, etc.)
-     
-     - localStorage:
-         • stape: Objeto JSON contendo as entradas de dados (ex.: utm_source, utm_medium, data_entrada, xcod, etc.),
-                  incluindo o histórico de toques em "touchHistory".
-     
-     - sessionStorage:
-         • trk_xcod: Armazenamento temporário do identificador único para a sessão atual.
-  ========================================================================== */
-
-  // AUTORIA (exibida de forma discreta no console)
   console.info("%cAUTORIA: Vinícius Fonseca - Agência Murupi Marketing Digital, Automaçòes e Inteligência Artificial", "color: gray; font-size: 10px;");
 
 })();
