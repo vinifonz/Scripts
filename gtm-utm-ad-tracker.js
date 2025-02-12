@@ -91,9 +91,10 @@
   ========================================================================== */
 
   var EXPIRY_SECONDS = 31536000; // 1 ano (em segundos)
-  // Adicionamos "utm_id" à lista de parâmetros utm
-  var utmParams = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','utm_id'];
-  var clickParams = ['fbclid','gclid','ttclid','xclid'];
+  // Atualizamos a lista de parâmetros utm para incluir "utm_id" e "ad_id"
+  var utmParams = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','utm_id','ad_id'];
+  // Atualizamos os parâmetros de clique para incluir "gclig" (caso haja variações)
+  var clickParams = ['fbclid','gclid','gclig','ttclid','xclid'];
   var cookiePrefix = 'trk_';
 
   /* ==========================================================================
@@ -168,9 +169,9 @@
   /* ==========================================================================
      ETAPA 4: Construção dos parâmetros customizados para a URL
      - "src": dados de entrada no formato:
-           utm_sourceEntrada|utm_mediumEntrada|utm_campaignEntrada|utm_termEntrada|utm_contentEntrada|[utm_id]|data_entrada
+           utm_sourceEntrada|utm_mediumEntrada|utm_campaignEntrada|utm_termEntrada|utm_contentEntrada|[utm_id]|[ad_id]|data_entrada
      - "sck": dados atuais no formato:
-           utm_sourceAtual|utm_mediumAtual|utm_campaignAtual|utm_termAtual|utm_contentAtual|[utm_id]|dataAtual
+           utm_sourceAtual|utm_mediumAtual|utm_campaignAtual|utm_termAtual|utm_contentAtual|[utm_id]|[ad_id]|dataAtual
   ========================================================================== */
   function buildCustomParam(suffix, dataObj) {
     return utmParams.map(function(param) {
@@ -226,7 +227,43 @@
   */
 
   /* ==========================================================================
-     EXPOSIÇÃO DOS DADOS (Opcional)
+     ETAPA 7: Armazenamento do Histórico de Touches
+     Para tornar o rastreamento mais robusto e possibilitar uma atribuição multi-touch,
+     registramos cada toque (quando os parâmetros UTM estiverem presentes) em um histórico.
+  ========================================================================== */
+  function updateTouchHistory(currentUTMData) {
+    var stapeData = {};
+    try {
+      stapeData = JSON.parse(localStorage.getItem('stape')) || {};
+    } catch(e) {
+      stapeData = {};
+    }
+    var history = stapeData.touchHistory || [];
+    // Cria um novo toque com os parâmetros UTM e timestamp.
+    var newTouch = {
+      utm: {},
+      timestamp: Date.now()
+    };
+    utmParams.forEach(function(param) {
+      newTouch.utm[param] = currentUTMData[param] || "";
+    });
+    // Evita duplicações: adiciona o toque se for diferente do último registrado.
+    if (history.length === 0 || JSON.stringify(history[history.length - 1].utm) !== JSON.stringify(newTouch.utm)) {
+      history.push(newTouch);
+    }
+    stapeData.touchHistory = history;
+    localStorage.setItem('stape', JSON.stringify(stapeData));
+  }
+  // Se houver ao menos um dos parâmetros UTM na visita atual, atualiza o histórico.
+  var hasNewUTM = utmParams.some(function(param) {
+    return currentData[param] && currentData[param] !== "";
+  });
+  if (hasNewUTM) {
+    updateTouchHistory(currentData);
+  }
+
+  /* ==========================================================================
+     EXPOSIÇÃO DOS DADOS (OPCIONAL)
      Os dados coletados são expostos via variável global _trackingData, 
      facilitando a utilização em outras tags ou Data Variables no GTM.
   ========================================================================== */
@@ -249,16 +286,19 @@
          • trk_utm_term: Valor do parâmetro utm_term.
          • trk_utm_content: Valor do parâmetro utm_content.
          • trk_utm_id: Valor do parâmetro utm_id.
+         • trk_ad_id: Valor do parâmetro ad_id.
          • (Outros cookies de clique, se presentes, como trk_fbclid, trk_gclid, etc.)
      
      - localStorage:
-         • stape: Objeto JSON contendo as entradas de dados (ex.: utm_source, utm_medium, data_entrada, xcod, etc.).
+         • stape: Objeto JSON contendo as entradas de dados (ex.: utm_source, utm_medium, data_entrada, xcod, etc.),
+                  incluindo o histórico de toques em "touchHistory".
      
      - sessionStorage:
          • trk_xcod: Armazenamento temporário do identificador único para a sessão atual.
   ========================================================================== */
 
-  console.log("Vinícius Fonseca - Agência Murupi Marketing Digital, Automaçòes e Inteligência Artificial");
+  // AUTORIA (exibida de forma discreta no console)
+  console.info("%cAUTORIA: Vinícius Fonseca - Agência Murupi Marketing Digital, Automaçòes e Inteligência Artificial", "color: gray; font-size: 10px;");
 
 })();
 </script>
