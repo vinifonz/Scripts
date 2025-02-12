@@ -150,13 +150,19 @@
     }
   }
 
-  /* ==========================================================================
-     ETAPA 3: Coleta dos parâmetros "atuais" (dinâmicos a cada acesso)
+   /* ==========================================================================  
+     ETAPA 3: Coleta dos parâmetros "atuais" (dinâmicos a cada acesso)  
   ========================================================================== */
   var currentData = {};
   utmParams.forEach(function(param) {
     currentData[param] = getQueryParam(param) || "";
   });
+  
+  // Se utm_source estiver vazio, aplica o fallback semelhante ao entryData
+  if (!currentData['utm_source'] || currentData['utm_source'] === "") {
+    currentData['utm_source'] = document.referrer ? (new URL(document.referrer).hostname || "indefinido") : "direto";
+  }
+  
   clickParams.forEach(function(param) {
     var val = getQueryParam(param);
     if (val) {
@@ -165,6 +171,7 @@
   });
   currentData['dataAtual'] = Date.now();
   currentData['xcod'] = xcod;
+
 
   /* ==========================================================================
      ETAPA 4: Construção dos parâmetros customizados para a URL
