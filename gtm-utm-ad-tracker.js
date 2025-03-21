@@ -22,6 +22,21 @@
   }
 
   /**
+   * Verifica se sessionStorage está disponível e funcionando
+   * @returns {boolean}
+   */
+  function isSessionStorageAvailable() {
+    var test = 'test';
+    try {
+      sessionStorage.setItem(test, test);
+      sessionStorage.removeItem(test);
+      return true;
+    } catch(e) {
+      return false;
+    }
+  }
+
+  /**
    * Sanitiza uma string para uso seguro em URLs
    * @param {string} str String para sanitizar
    * @returns {string}
@@ -174,12 +189,24 @@
   var utmParams = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','utm_id','ad_id'];
   var clickParams = ['fbclid','gclid','gclig','ttclid','xclid'];
   var cookiePrefix = 'trk_';
-  var VERSION = '1.1.0'; // Adicionado versionamento
+  var VERSION = '1.2.0'; // Atualizado versionamento
+  var SESSION_KEY = 'current_session';
 
   /* ==========================================================================
-     ETAPA 1: Recuperação / Criação do identificador único "xcod"
+     ETAPA 1: Recuperação / Criação do identificador único "xcod" e sessão
   ========================================================================== */
   var xcod = getCookie(cookiePrefix + 'xcod');
+  var sessionId;
+  
+  // Verifica se já existe uma sessão atual
+  if (isSessionStorageAvailable()) {
+    sessionId = sessionStorage.getItem(cookiePrefix + SESSION_KEY);
+    if (!sessionId) {
+      sessionId = generateUID();
+      sessionStorage.setItem(cookiePrefix + SESSION_KEY, sessionId);
+    }
+  }
+  
   if (!xcod) {
     xcod = generateUID();
     setCookie(cookiePrefix + 'xcod', xcod, EXPIRY_SECONDS);
@@ -268,6 +295,9 @@
   
   currentData['dataAtual'] = new Date().getTime();
   currentData['xcod'] = xcod;
+  if (sessionId) {
+    currentData['sessionId'] = sessionId;
+  }
 
   /* ==========================================================================
      ETAPA 4: Construção dos parâmetros customizados para a URL
@@ -352,7 +382,7 @@
   // updateButtons();
 
   /* ==========================================================================
-     ETAPA 7: Armazenamento do Histórico de Touches
+     ETAPA 7: Armazenamento do Histórico de Touches (Um por sessão, cada sessão gera um novo)
   ========================================================================== */
   function updateTouchHistory(currentUTMData) {
     if (!isLocalStorageAvailable() || !currentUTMData) {
@@ -371,35 +401,109 @@
 
     var history = Array.isArray(stapeData.touchHistory) ? stapeData.touchHistory : [];
     
-    var newTouch = {
-      utm: {},
-      timestamp: new Date().getTime()
-    };
-
-    for (var i = 0; i < utmParams.length; i++) {
-      var param = utmParams[i];
-      newTouch.utm[param] = currentUTMData[param] || "";
-    }
-
-    var lastTouch = history.length ? history[history.length - 1] : null;
-    if (!lastTouch || JSON.stringify(lastTouch.utm) !== JSON.stringify(newTouch.utm)) {
-      history.push(newTouch);
+    // Verificar se já existe um touch para esta sessão
+    var sessionTouch = null;
+    var touchSessionKey = cookiePrefix + 'touch_session';
+    var touchRegistered = false;
+    
+    // Verificar se já registramos um touch para esta sessão específica
+    if (isSessionStorageAvailable() && sessionId) {
+      touchRegistered = sessionStorage.getItem(touchSessionKey) === sessionId;
       
-      // Mantém apenas os últimos 50 toques
-      if (history.length > 50) {
-        history = history.slice(-50);
-      }
-      
-      stapeData.touchHistory = history;
-      try {
-        localStorage.setItem('stape', JSON.stringify(stapeData));
-        return true;
-      } catch(e) {
-        console.warn('Error updating touch history:', e);
-        return false;
+      // Se já registramos, encontre-o no histórico para atualizações
+      if (touchRegistered) {
+        for (var i = 0; i < history.length; i++) {
+          if (history[i].sessionId === sessionId) {
+            sessionTouch = history[i];
+            break;
+          }
+        }
       }
     }
-    return true;
+    
+    // Se já existe um touch para esta sessão, apenas atualize os parâmetros UTM
+    if (sessionTouch) {
+      for (var j = 0; j < utmParams.length; j++) {
+        var param = utmParams[j];
+        // Só atualiza se o novo valor não for vazio
+        if (currentUTMData[param] && currentUTMData[param] !== "") {
+          sessionTouch.utm[param] = currentUTMData[param];
+        }
+      }
+      // Atualiza também os parâmetros de clique
+      for (var k = 0; k < clickParams.length; k++) {
+        var clickParam = clickParams[k];
+        if (currentUTMData[clickParam] && currentUTMData[clickParam] !== "") {
+          if (!sessionTouch.clickParams) {
+            sessionTouch.clickParams = {};
+          }
+          sessionTouch.clickParams[clickParam] = currentUTMData[clickParam];
+        }
+      }
+    } 
+    // Se não existe, cria um novo touch para esta sessão
+    else {
+      var newTouch = {
+        utm: {},
+        timestamp: new Date().getTime()
+      };
+      
+      if (sessionId) {
+        newTouch.sessionId = sessionId;
+      }
+
+      for (var m = 0; m < utmParams.length; m++) {
+        var utmParam = utmParams[m];
+        newTouch.utm[utmParam] = currentUTMData[utmParam] || "";
+      }
+      
+      // Adiciona parâmetros de clique também
+      var hasClickParams = false;
+      for (var n = 0; n < clickParams.length; n++) {
+        var cp = clickParams[n];
+        if (currentUTMData[cp] && currentUTMData[cp] !== "") {
+          if (!newTouch.clickParams) {
+            newTouch.clickParams = {};
+          }
+          newTouch.clickParams[cp] = currentUTMData[cp];
+          hasClickParams = true;
+        }
+      }
+
+      var shouldAddTouch = false;
+      
+      // Verifica se há algum UTM não vazio
+      for (var o = 0; o < utmParams.length; o++) {
+        if (newTouch.utm[utmParams[o]] && newTouch.utm[utmParams[o]] !== "") {
+          shouldAddTouch = true;
+          break;
+        }
+      }
+      
+      // Adiciona o touch se tiver UTMs ou parâmetros de clique
+      if (shouldAddTouch || hasClickParams) {
+        history.push(newTouch);
+        
+        // Marca esta sessão como já tendo um touch registrado
+        if (isSessionStorageAvailable() && sessionId) {
+          sessionStorage.setItem(touchSessionKey, sessionId);
+        }
+      }
+    }
+    
+    // Mantém apenas os últimos 50 toques
+    if (history.length > 50) {
+      history = history.slice(-50);
+    }
+    
+    stapeData.touchHistory = history;
+    try {
+      localStorage.setItem('stape', JSON.stringify(stapeData));
+      return true;
+    } catch(e) {
+      console.warn('Error updating touch history:', e);
+      return false;
+    }
   }
 
   var hasNewUTM = false;
@@ -407,6 +511,16 @@
     if (currentData[utmParams[m]] && currentData[utmParams[m]] !== "") {
       hasNewUTM = true;
       break;
+    }
+  }
+  
+  // Verifica também parâmetros de clique
+  if (!hasNewUTM) {
+    for (var n = 0; n < clickParams.length; n++) {
+      if (currentData[clickParams[n]] && currentData[clickParams[n]] !== "") {
+        hasNewUTM = true;
+        break;
+      }
     }
   }
   
@@ -420,6 +534,7 @@
   window._trackingData = {
     version: VERSION,
     xcod: xcod,
+    sessionId: sessionId,
     entryData: entryData,
     currentData: currentData,
     src: srcParam,
